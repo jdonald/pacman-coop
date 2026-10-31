@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0a26" />
+    <meta name="description" content="Pac-Man Co-op: chomp pellets together with up to 4 friends in a chunky 3D maze." />
+    <title>Pac-Man Co-op</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" class="hidden">
+      <div class="hud-left">
+        <div class="level">LEVEL <span id="level">1</span></div>
+        <div class="score" id="team">0</div>
+        <div class="pellets"><span id="left">0</span> pellets left</div>
+      </div>
+      <ul class="hud-right" id="players"></ul>
+      <div class="hud-bottom">
+        <button id="invite" class="pill" title="Copy invite link">
+          <span class="room-label">Room</span> <b id="room-code">----</b> <span class="copy">Invite</span>
+        </button>
+        <span id="net" class="pill net"></span>
+        <button id="btn-settings" class="icon" title="Name & skin">⚙︎</button>
+        <button id="btn-sound" class="icon" title="Sound">🔊</button>
+        <button id="btn-new" class="icon" title="New private room">＋</button>
+      </div>
+    </div>
+
+    <div id="banner" class="banner">Connecting…</div>
+    <div id="toasts"></div>
+    <div id="hint" class="hint">Arrows / WASD / swipe to move · Eat every pellet together!</div>
+
+    <div id="settings" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <form class="card" id="settings-form">
+        <h2 id="settings-title">Your Pac</h2>
+        <label class="field">
+          <span>Name</span>
+          <div class="row">
+            <input id="name" maxlength="18" autocomplete="off" spellcheck="false" />
+            <button type="button" id="reroll" class="icon" title="Random name">🎲</button>
+          </div>
+        </label>
+        <div class="field">
+          <span>Color</span>
+          <div id="colors" class="swatches"></div>
+        </div>
+        <div class="field">
+          <span>Hat</span>
+          <div id="hats" class="chips"></div>
+        </div>
+        <div class="actions">
+          <button type="button" id="settings-cancel" class="ghost-btn">Cancel</button>
+          <button type="submit" class="primary">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="message" class="modal hidden">
+      <div class="card">
+        <h2 id="message-title"></h2>
+        <p id="message-body"></p>
+        <div class="actions" id="message-actions"></div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
