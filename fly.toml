@@ -1,0 +1,37 @@
+# Fly.io config for the game server. San Jose (sjc) keeps latency low for
+# California players. Deploy with:
+#   fly launch --copy-config --no-deploy
+#   fly deploy --ha=false        # rooms live in memory: run exactly ONE machine
+app = "pacman-coop"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  # Comma-separated list of allowed browser origins (empty = allow all), e.g.
+  # ALLOWED_ORIGINS = "https://<you>.github.io"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Stops when nobody is connected (free-tier friendly); wakes on the next visit.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 400
+    hard_limit = 500
+
+[[http_service.checks]]
+  grace_period = "5s"
+  interval = "30s"
+  method = "GET"
+  path = "/health"
+  timeout = "3s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

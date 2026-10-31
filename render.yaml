@@ -1,0 +1,15 @@
+# Render Blueprint: free web service for the game server (also serves the
+# client). Free instances sleep after 15 idle minutes and take ~1 minute to
+# wake; the game shows "Waking up the game server…" meanwhile.
+services:
+  - type: web
+    name: pacman-coop
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
