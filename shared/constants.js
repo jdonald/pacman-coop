@@ -29,7 +29,11 @@ export const POWER = 2;
 
 export const POINTS = { pellet: 10, power: 50, ghost: [200, 400, 800, 1600], clear: 500 };
 
-export const READY_TIME = 2.0; // seconds of "READY!" before a level starts
+// Seconds of "READY!" before a level starts: the first level waits for the
+// full intro tune, later levels only for a short sting.
+export function readyTime(level) {
+  return level === 1 ? 4.5 : 2.2;
+}
 export const CLEAR_TIME = 2.6; // seconds of celebration after clearing a level
 export const RESPAWN_TIME = 2.2; // seconds a player stays dead (infinite lives!)
 export const INVULN_TIME = 2.5; // seconds of blinking invulnerability after (re)spawn

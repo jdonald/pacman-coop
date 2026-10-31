@@ -73,7 +73,7 @@ test('speed hacks and wall clipping are corrected', () => {
   const room = new Room({ code: 'T2' });
   const msgs = [];
   room.addPlayer('x', {}, (m) => msgs.push(m));
-  for (let i = 0; i < 200; i++) room.tick(TICK_DT); // past READY
+  for (let i = 0; i < 300; i++) room.tick(TICK_DT); // past READY
   const p = room.players.get('x');
   room.handleMessage('x', { t: 'in', x: p.x + 8, y: p.y, life: p.life, face: 2 });
   assert.ok(msgs.some((m) => m.t === 'correct'));
@@ -86,7 +86,7 @@ test('power pellet frightens ghosts and they can be eaten, then return home', ()
   const room = new Room({ code: 'T3' });
   const msgs = [];
   room.addPlayer('x', {}, (m) => msgs.push(m));
-  for (let i = 0; i < 200; i++) room.tick(TICK_DT);
+  for (let i = 0; i < 300; i++) room.tick(TICK_DT);
   const p = room.players.get('x');
   room.startFright(p);
   const g = room.ghosts[0];
@@ -108,7 +108,7 @@ test('death and respawn with infinite lives', () => {
   const room = new Room({ code: 'T4' });
   const msgs = [];
   room.addPlayer('x', {}, (m) => msgs.push(m));
-  for (let i = 0; i < 60 * 5; i++) room.tick(TICK_DT); // past READY + invulnerability
+  for (let i = 0; i < 60 * 8; i++) room.tick(TICK_DT); // past READY + invulnerability
   const p = room.players.get('x');
   const life = p.life;
   room.handleMessage('x', { t: 'died', g: 0, life });
@@ -122,7 +122,7 @@ test('death and respawn with infinite lives', () => {
 test('clearing all pellets advances the level', () => {
   const room = new Room({ code: 'T5' });
   room.addPlayer('x', {}, () => {});
-  for (let i = 0; i < 200; i++) room.tick(TICK_DT);
+  for (let i = 0; i < 300; i++) room.tick(TICK_DT);
   room.pelletsLeft = 0;
   room.clearLevel();
   assert.equal(room.phase, 'clear');

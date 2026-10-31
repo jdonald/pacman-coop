@@ -1,8 +1,7 @@
 // Pac-Man Co-op game server: a small Node.js WebSocket server that hosts
 // authoritative game rooms. Deploy it anywhere that supports long-lived
-// WebSocket connections (Fly.io, Render, Railway, a VPS...). Vercel serverless
-// functions can't hold WebSockets, so the static client lives on Vercel and
-// points at this server via VITE_GAME_SERVER_URL.
+// WebSocket connections (Render, Fly.io, Railway, a VPS...). A static copy of
+// the client (e.g. on GitHub Pages) can point at it via VITE_GAME_SERVER_URL.
 //
 // It can also serve the built client from ./dist, so a single deployment of
 // this server is a complete game.

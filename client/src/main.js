@@ -2,7 +2,7 @@ import { TICK_DT, POWER } from '../../shared/constants.js';
 import { randomName, defaultSkin, SKIN_COLORS, HATS, colorHex, sanitizeProfile } from '../../shared/profile.js';
 import { Game } from './game.js';
 import { Renderer } from './render.js';
-import { SocketTransport, LocalTransport, serverUrl } from './net.js';
+import { SocketTransport, LocalTransport, serverUrl, healthUrl } from './net.js';
 import { setupInput } from './input.js';
 import { Sfx } from './audio.js';
 
@@ -44,33 +44,47 @@ let connectTimer = null;
 let reconnectDelay = 1000;
 let everConnected = false;
 
-function connect() {
+const WAKE_TIMEOUT = 75000; // free-tier servers can take ~1 min to wake up
+let firstAttemptAt = 0;
+
+async function connect() {
   clearTimeout(connectTimer);
   if (game) game.transport.close();
-  let transport;
-  if (forceOffline) {
-    transport = new LocalTransport();
-  } else {
-    transport = new SocketTransport(serverUrl(roomCode));
-    // Fall back to offline solo play if the server can't be reached at all.
-    connectTimer = setTimeout(() => {
-      if (!game.you && transport.ws.readyState !== WebSocket.OPEN) fallbackOffline();
-    }, 6000);
-    transport.onclose = () => {
-      if (game?.transport !== transport) return;
-      if (!game.you && !everConnected) return fallbackOffline();
-      setBanner('Reconnecting…');
-      setTimeout(connect, reconnectDelay);
-      reconnectDelay = Math.min(8000, reconnectDelay * 1.6);
-    };
+  if (forceOffline) return startGame(new LocalTransport());
+  if (!firstAttemptAt) {
+    firstAttemptAt = performance.now();
+    // No game server at all (e.g. a static host with no server configured)?
+    // Go straight to offline solo play. This request also wakes sleeping servers.
+    const ok = await fetch(healthUrl(), { cache: 'no-store' })
+      .then((r) => r.ok || r.status >= 500)
+      .catch(() => !!import.meta.env.VITE_GAME_SERVER_URL);
+    if (!ok) return fallbackOffline(true);
   }
+  const transport = new SocketTransport(serverUrl(roomCode));
+  connectTimer = setTimeout(() => {
+    if (!game.you && transport.ws.readyState !== WebSocket.OPEN) transport.onclose();
+  }, 6000);
+  transport.onclose = () => {
+    if (game?.transport !== transport) return;
+    clearTimeout(connectTimer);
+    transport.close();
+    if (!everConnected) {
+      if (performance.now() - firstAttemptAt > WAKE_TIMEOUT) return fallbackOffline();
+      setBanner('Waking up the game server…<small>Free servers nap when idle. This can take up to a minute.</small>');
+      setTimeout(connect, 2500);
+      return;
+    }
+    setBanner('Reconnecting…');
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(8000, reconnectDelay * 1.6);
+  };
   startGame(transport);
 }
 
-function fallbackOffline() {
+function fallbackOffline(noServer = false) {
   clearTimeout(connectTimer);
   if (game && game.transport.online) game.transport.close();
-  toast("Couldn't reach the game server — playing solo offline.");
+  toast(noServer ? 'No game server configured: playing solo offline.' : "Couldn't reach the game server: playing solo offline.");
   startGame(new LocalTransport());
 }
 
@@ -106,7 +120,7 @@ function onGameEvent(type, data) {
       break;
     case 'level':
       renderer.setMaze(game.maze, game.level, game.pellets);
-      sfx.ready();
+      playLevelMusic();
       break;
     case 'phase':
       break;
@@ -250,7 +264,7 @@ $('invite').addEventListener('click', async () => {
 });
 
 $('btn-sound').addEventListener('click', () => {
-  sfx.unlock();
+  unlockAudio();
   sfx.setMuted(!sfx.muted);
   $('btn-sound').textContent = sfx.muted ? '🔇' : '🔊';
 });
@@ -348,13 +362,27 @@ const modalOpen = () => !$('settings').classList.contains('hidden');
 const pollPads = setupInput(
   canvas,
   (dir) => {
-    sfx.unlock();
-    game.setDirection(dir);
+    game?.setDirection(dir);
     $('hint').classList.add('off');
   },
   modalOpen,
 );
-window.addEventListener('pointerdown', () => sfx.unlock(), { once: true });
+// Browsers only allow audio after a user gesture; if that first gesture
+// lands during READY, start the level tune right away.
+let musicPlayedFor = -1;
+function playLevelMusic() {
+  if (!sfx.ready || !game.maze || game.phase !== 'ready' || musicPlayedFor === game.level) return;
+  const left = game.phaseRemaining(performance.now());
+  if (left < 0.6) return;
+  musicPlayedFor = game.level;
+  sfx.levelStart(game.level === 1 && left > 3.6);
+}
+function unlockAudio() {
+  sfx.unlock();
+  playLevelMusic();
+}
+window.addEventListener('pointerdown', unlockAudio);
+window.addEventListener('keydown', unlockAudio);
 
 // ------------------------------------------------------------------ loop
 
@@ -364,6 +392,10 @@ function frame() {
   const now = performance.now();
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  if (!game) {
+    requestAnimationFrame(frame);
+    return;
+  }
   pollPads();
   game.transport.update();
   game.frame(now);
@@ -376,6 +408,13 @@ function frame() {
   if (steps >= 8) acc = 0;
   renderer.render(game, acc / TICK_DT, now, dt);
   updateHud(now);
+  const lastSnap = game.snaps[game.snaps.length - 1];
+  sfx.updateLoops({
+    playing: game.phase === 'play' && !!game.maze,
+    fright: game.fright > 0,
+    eyes: game.ghostView.some((g) => g.mode === 4),
+    progress: lastSnap && game.maze ? 1 - lastSnap.left / game.maze.pelletCount : 0,
+  });
   requestAnimationFrame(frame);
 }
 

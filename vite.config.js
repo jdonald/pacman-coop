@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: 'client',
+  // Relative asset URLs so the build works under any path (e.g. GitHub Pages
+  // project sites at /pacman-coop/) as well as at a domain root.
+  base: './',
   publicDir: 'public',
   build: {
     outDir: '../dist',

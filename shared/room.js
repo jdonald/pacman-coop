@@ -14,7 +14,7 @@
 
 import {
   TICK_DT, SNAPSHOT_EVERY, MAX_PLAYERS, NONE, UP, LEFT, DX, DY, OPP, POINTS,
-  READY_TIME, CLEAR_TIME, RESPAWN_TIME, INVULN_TIME, pacSpeed, ghostSpeed,
+  readyTime, CLEAR_TIME, RESPAWN_TIME, INVULN_TIME, pacSpeed, ghostSpeed,
   GHOST_FRIGHT_SPEED, GHOST_TUNNEL_SPEED, GHOST_EYES_SPEED, GHOST_HOUSE_SPEED,
   frightDuration, MODE_SCHEDULE, ghostReleaseDelays, PELLET, POWER,
 } from './constants.js';
@@ -61,7 +61,7 @@ export class Room {
     this.pellets = new Uint8Array(this.maze.initialPellets);
     this.pelletsLeft = this.maze.pelletCount;
     this.phase = 'ready';
-    this.phaseEnd = this.time + READY_TIME;
+    this.phaseEnd = this.time + readyTime(level);
     this.levelTime = 0; // time spent in 'play'
     this.modeIndex = 0;
     this.modeTime = 0;

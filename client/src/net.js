@@ -16,6 +16,12 @@ export function serverUrl(room) {
   return room ? `${base}?room=${encodeURIComponent(room)}` : base;
 }
 
+/** HTTP health endpoint of the game server (also used to wake it up). */
+export function healthUrl() {
+  const ws = serverUrl('');
+  return ws.replace(/^ws/, 'http').replace(/\/ws$/, '/health');
+}
+
 export class SocketTransport {
   constructor(url) {
     this.url = url;
