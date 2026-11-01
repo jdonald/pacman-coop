@@ -13,7 +13,7 @@
 //    trade-off: nobody dies to a ghost that wasn't on their screen.
 
 import {
-  TICK_DT, SNAPSHOT_EVERY, MAX_PLAYERS, NONE, UP, LEFT, DX, DY, OPP, POINTS,
+  TICK_DT, SNAPSHOT_EVERY, GHOST_EAT_PAUSE, PELLET_SYNC_EVERY, MAX_PLAYERS, NONE, UP, LEFT, DX, DY, OPP, POINTS,
   readyTime, CLEAR_TIME, RESPAWN_TIME, INVULN_TIME, pacSpeed, ghostSpeed,
   GHOST_FRIGHT_SPEED, GHOST_TUNNEL_SPEED, GHOST_EYES_SPEED, GHOST_HOUSE_SPEED,
   frightDuration, MODE_SCHEDULE, ghostReleaseDelays, PELLET, POWER,
@@ -59,6 +59,7 @@ export class Room {
     this.level = level;
     this.maze = getMaze(mazeForLevel(level));
     this.pellets = new Uint8Array(this.maze.initialPellets);
+    this.pauseUntil = 0;
     this.pelletsLeft = this.maze.pelletCount;
     this.phase = 'ready';
     this.phaseEnd = this.time + readyTime(level);
@@ -289,7 +290,11 @@ export class Room {
     const pts = POINTS.ghost[Math.min(this.frightCombo, POINTS.ghost.length - 1)];
     this.frightCombo++;
     this.addScore(p, pts);
-    this.broadcast({ t: 'ev', k: 'ghost', id: p.id, g: g.id, pts, x: r2(g.x), y: r2(g.y) });
+    // Arcade-style freeze for everyone while the score pops up.
+    this.pauseUntil = Math.max(this.pauseUntil, this.time + GHOST_EAT_PAUSE);
+    this.broadcast({
+      t: 'ev', k: 'ghost', id: p.id, g: g.id, pts, x: r2(g.x), y: r2(g.y), pause: GHOST_EAT_PAUSE,
+    });
   }
 
   addScore(p, pts) {
@@ -336,7 +341,11 @@ export class Room {
       if (p.moving && this.time - p.lastInputAt > 0.5) p.moving = false;
     }
 
-    if (this.phase === 'play') this.updateGhosts(dt);
+    // Ghosts (and all timers) stand still during the ghost-eaten freeze.
+    if (this.phase === 'play' && this.time >= this.pauseUntil) this.updateGhosts(dt);
+    if (this.tickCount % PELLET_SYNC_EVERY === 0) {
+      this.broadcast({ t: 'pellets', s: pelletsToString(this.pellets), left: this.pelletsLeft });
+    }
 
     if (this.tickCount % SNAPSHOT_EVERY === 0) this.broadcast(this.snapshot());
   }
@@ -510,6 +519,7 @@ export class Room {
       phase: this.phase,
       phaseLeft: r2(Math.max(0, this.phaseEnd - this.time)),
       fright: r2(this.frightLeft),
+      pause: r2(Math.max(0, this.pauseUntil - this.time)),
       team: this.teamScore,
       left: this.pelletsLeft,
       ghosts,

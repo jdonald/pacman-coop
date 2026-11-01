@@ -40,59 +40,159 @@ const params = new URLSearchParams(location.search);
 let roomCode = params.get('room') || '';
 const forceOffline = params.has('offline');
 let game = null;
-let connectTimer = null;
-let reconnectDelay = 1000;
-let everConnected = false;
 
-const WAKE_TIMEOUT = 75000; // free-tier servers can take ~1 min to wake up
-let firstAttemptAt = 0;
+// Offline-first flow:
+//  1. Start a solo game instantly (works with no network at all).
+//  2. Meanwhile, find the game server in the background (waking it if it's a
+//     sleeping free-tier instance), retrying for as long as it takes.
+//  3. When it answers: invite links (and games nobody has started playing)
+//     switch online automatically; otherwise a "Play online" button appears.
+//  4. If an online game loses its connection for good, drop back to solo and
+//     go back to step 2.
+let serverState = forceOffline ? 'none' : 'probing'; // probing | ready | none | online
+let pending = null; // an online Game waiting for its 'welcome'
+let probeTimer = null;
+let probeDelay = 2000;
+let wantOnline = !!roomCode; // set by invite links / the Play online button
 
-async function connect() {
-  clearTimeout(connectTimer);
-  if (game) game.transport.close();
-  if (forceOffline) return startGame(new LocalTransport());
-  if (!firstAttemptAt) {
-    firstAttemptAt = performance.now();
-    // No game server at all (e.g. a static host with no server configured)?
-    // Go straight to offline solo play. This request also wakes sleeping servers.
-    const ok = await fetch(healthUrl(), { cache: 'no-store' })
-      .then((r) => r.ok || r.status >= 500)
-      .catch(() => !!import.meta.env.VITE_GAME_SERVER_URL);
-    if (!ok) return fallbackOffline(true);
+function startSolo() {
+  setGame(new Game(new LocalTransport(), profile, emitFor));
+}
+
+function setGame(g) {
+  if (game && game !== g) game.transport.close();
+  game = g;
+  updateOnlineButton();
+}
+
+/** Each Game reports through this; only the active game drives the UI. */
+function emitFor(type, data) {
+  const g = this;
+  if (g === pending) {
+    if (type === 'welcome') {
+      pending = null;
+      clearTimeout(g.joinTimer);
+      serverState = 'online';
+      setGame(g);
+    } else if (type === 'error') {
+      pending = null;
+      g.transport.close();
+      serverState = 'ready';
+      return onGameEvent(type, data);
+    } else return;
   }
-  const transport = new SocketTransport(serverUrl(roomCode));
-  connectTimer = setTimeout(() => {
-    if (!game.you && transport.ws.readyState !== WebSocket.OPEN) transport.onclose();
-  }, 6000);
-  transport.onclose = () => {
-    if (game?.transport !== transport) return;
-    clearTimeout(connectTimer);
-    transport.close();
-    if (!everConnected) {
-      if (performance.now() - firstAttemptAt > WAKE_TIMEOUT) return fallbackOffline();
-      setBanner('Waking up the game server…<small>Free servers nap when idle. This can take up to a minute.</small>');
-      setTimeout(connect, 2500);
-      return;
-    }
+  if (g === game) onGameEvent(type, data);
+}
+
+async function probe() {
+  clearTimeout(probeTimer);
+  if (serverState !== 'probing') return;
+  if (!navigator.onLine) return; // the 'online' event will call us again
+  updateOnlineButton();
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
+  let status = 0;
+  try {
+    status = (await fetch(healthUrl(), { cache: 'no-store', signal: ctl.signal })).status;
+  } catch {
+    status = 0;
+  }
+  clearTimeout(t);
+  if (serverState !== 'probing') return;
+  if (status >= 200 && status < 300) {
+    probeDelay = 2000;
+    serverState = 'ready';
+    if (wantOnline || (game && game.team === 0 && !game.transport.online)) goOnline();
+    else toast('Online play is ready! Tap 🌐 to join other players.');
+    updateOnlineButton();
+    return;
+  }
+  if (status === 404 && !import.meta.env.VITE_GAME_SERVER_URL) {
+    serverState = 'none'; // static hosting with no game server configured
+    updateOnlineButton();
+    return;
+  }
+  // Unreachable or still waking up: keep trying, backing off to 30 s.
+  probeTimer = setTimeout(probe, probeDelay);
+  probeDelay = Math.min(30000, probeDelay * 1.5);
+}
+
+function goOnline() {
+  if (pending || (game && game.transport.online && serverState === 'online')) return;
+  wantOnline = true;
+  const g = new Game(new SocketTransport(serverUrl(roomCode)), profile, null);
+  g.emit = emitFor.bind(g);
+  pending = g;
+  if (!game || !game.you) setBanner(roomCode ? `Joining room ${roomCode}…` : 'Joining online game…');
+  else toast(roomCode ? `Joining room ${roomCode}…` : 'Joining an online game…');
+  g.transport.onclose = () => onSocketClosed(g);
+  g.joinTimer = setTimeout(() => onSocketClosed(g), 8000);
+  updateOnlineButton();
+}
+
+let lostAt = 0;
+function onSocketClosed(g) {
+  clearTimeout(g.joinTimer);
+  g.transport.close();
+  if (g === pending) {
+    // Couldn't join: keep playing whatever we were playing and retry later.
+    pending = null;
+    serverState = 'probing';
+    probeTimer = setTimeout(probe, probeDelay);
+    updateOnlineButton();
+    return;
+  }
+  if (g !== game) return;
+  // The online game dropped. Try to rejoin the same room for a little while…
+  if (!lostAt) lostAt = performance.now();
+  if (performance.now() - lostAt < 10000) {
     setBanner('Reconnecting…');
-    setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(8000, reconnectDelay * 1.6);
-  };
-  startGame(transport);
+    const r = new Game(new SocketTransport(serverUrl(roomCode)), profile, null);
+    r.emit = (type, data) => {
+      if (type === 'welcome') {
+        lostAt = 0;
+        serverState = 'online';
+        setGame(r);
+      }
+      if (r === game) onGameEvent(type, data);
+    };
+    let retried = false;
+    const retry = () => {
+      if (retried || r === game) return;
+      retried = true;
+      r.transport.close();
+      setTimeout(() => onSocketClosed(g), 1500);
+    };
+    r.transport.onclose = () => (r === game ? onSocketClosed(r) : retry());
+    setTimeout(retry, 4000);
+    return;
+  }
+  // …then fall back to solo and keep looking for the server.
+  lostAt = 0;
+  setBanner('');
+  toast('Lost connection: playing solo. We\'ll get you back online when we can.');
+  serverState = 'probing';
+  startSolo();
+  probeTimer = setTimeout(probe, 3000);
 }
 
-function fallbackOffline(noServer = false) {
-  clearTimeout(connectTimer);
-  if (game && game.transport.online) game.transport.close();
-  toast(noServer ? 'No game server configured: playing solo offline.' : "Couldn't reach the game server: playing solo offline.");
-  startGame(new LocalTransport());
+function updateOnlineButton() {
+  const btn = $('btn-online');
+  if (!btn) return;
+  const solo = !game || !game.transport.online;
+  btn.classList.toggle('hidden', !(solo && serverState === 'ready' && !pending));
 }
 
-function startGame(transport) {
-  const oldClose = transport.onclose;
-  game = new Game(transport, profile, onGameEvent);
-  if (oldClose) transport.onclose = oldClose;
-  setBanner(transport.online ? 'Connecting…' : '');
+window.addEventListener('online', () => {
+  if (serverState === 'probing') {
+    probeDelay = 2000;
+    probe();
+  }
+});
+
+function connect() {
+  startSolo();
+  if (!forceOffline) probe();
 }
 
 // ---------------------------------------------------------------- events
@@ -100,9 +200,7 @@ function startGame(transport) {
 function onGameEvent(type, data) {
   switch (type) {
     case 'welcome':
-      clearTimeout(connectTimer);
-      everConnected = game.transport.online || everConnected;
-      reconnectDelay = 1000;
+      setBanner('');
       $('hud').classList.remove('hidden');
       if (game.transport.online) {
         roomCode = data.room;
@@ -112,6 +210,7 @@ function onGameEvent(type, data) {
       }
       $('room-code').textContent = game.transport.online ? data.room : 'SOLO';
       $('invite').disabled = !game.transport.online;
+      $('invite').classList.toggle('hidden', !game.transport.online); // nothing to invite to in solo
       // The server may tweak an auto-assigned color to avoid duplicates.
       if (profile.skin.auto) {
         profile = { ...profile, skin: { ...data.profile.skin, auto: true } };
@@ -136,11 +235,12 @@ function onGameEvent(type, data) {
     case 'ghostEaten': {
       const who = game.roster.get(data.id);
       renderer.popup(String(data.pts), data.x, data.y, '#5ee6ff');
-      sfx.ghost();
+      if (!data.mine) sfx.ghost(); // the eater already heard it instantly
       if (who && data.id !== game.you) toast(`${who.name} ate a ghost! +${data.pts}`);
       break;
     }
     case 'chomp':
+      sfx.ghost();
       break;
     case 'death':
       if (data.mine) sfx.death();
@@ -158,15 +258,14 @@ function onGameEvent(type, data) {
       toast(`${data.name} left`);
       break;
     case 'error':
-      clearTimeout(connectTimer);
-      game.transport.onclose = () => {};
+      setBanner('');
       if (data.code === 'full') {
         showMessage('Room is full', `Room ${data.room} already has ${data.max} players.`, [
+          ['Keep playing solo', () => {}],
           ['Join another game', () => goRoom('')],
-          ['Play solo', () => (location.href = '?offline')],
         ]);
       } else {
-        showMessage('Server busy', 'The game server is at capacity right now.', [['Play solo', fallbackOffline]]);
+        toast('The game server is busy right now: keep playing solo.');
       }
       break;
     default:
@@ -217,7 +316,15 @@ function updateHud(now) {
   });
   const lastSnap = game.snaps[game.snaps.length - 1];
   const left = lastSnap ? lastSnap.left : '';
-  const ping = game.transport.online ? (game.rtt != null ? `${Math.round(game.rtt)} ms` : '…') : 'offline';
+  const ping = game.transport.online
+    ? game.rtt != null
+      ? `${Math.round(game.rtt)} ms`
+      : '…'
+    : serverState === 'probing'
+      ? navigator.onLine
+        ? 'solo · finding server…'
+        : 'solo · offline'
+      : 'solo';
   const key = JSON.stringify([game.level, game.team, left, rows, ping]);
   if (key === lastHud) return;
   lastHud = key;
@@ -263,6 +370,7 @@ $('invite').addEventListener('click', async () => {
   }
 });
 
+$('btn-online').addEventListener('click', () => goOnline());
 $('btn-sound').addEventListener('click', () => {
   unlockAudio();
   sfx.setMuted(!sfx.muted);
@@ -410,7 +518,7 @@ function frame() {
   updateHud(now);
   const lastSnap = game.snaps[game.snaps.length - 1];
   sfx.updateLoops({
-    playing: game.phase === 'play' && !!game.maze,
+    playing: game.phase === 'play' && !!game.maze && !game.isPaused(now),
     fright: game.fright > 0,
     eyes: game.ghostView.some((g) => g.mode === 4),
     progress: lastSnap && game.maze ? 1 - lastSnap.left / game.maze.pelletCount : 0,
@@ -420,6 +528,11 @@ function frame() {
 
 connect();
 requestAnimationFrame(frame);
+
+// Installable PWA (Add to Home Screen) with offline solo play.
+if ('serviceWorker' in navigator && !import.meta.env.DEV) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
 
 // Handy for debugging in the console.
 window.pcoop = { get game() { return game; }, renderer };

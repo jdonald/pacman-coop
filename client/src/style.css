@@ -159,6 +159,17 @@ button {
   font-size: 13px;
   font-weight: 800;
 }
+.pill.online {
+  background: var(--accent);
+  color: #1b1600;
+  font-weight: 800;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    transform: scale(1.06);
+  }
+}
 .pill.net {
   font-size: 13px;
   color: var(--muted);
