@@ -2,7 +2,7 @@
 // interpolation for everything else, and message handling.
 
 import {
-  TICK_DT, INPUT_EVERY, NONE, HIT_DIST, INVULN_TIME, RESPAWN_TIME, POWER, pacSpeed,
+  TICK_DT, INPUT_EVERY, NONE, HIT_DIST, GHOST_EAT_PAUSE, INVULN_TIME, RESPAWN_TIME, POWER, pacSpeed,
 } from '../../shared/constants.js';
 import { getMaze, pacCanEnter, wrapX, pelletsFromString } from '../../shared/maze.js';
 import { advance, wrappedDist, wrapDelta } from '../../shared/movement.js';
@@ -20,7 +20,13 @@ export class Game {
     this.roster = new Map();
     this.level = 0;
     this.maze = null;
-    this.pellets = null;
+    this.pellets = null; // what we display & eat from (server state + our predictions)
+    this.serverPellets = null; // authoritative state as last reported by the server
+    this.pending = new Map(); // cell -> expiry: pellets we ate that the server hasn't confirmed yet
+    this.pauseUntil = 0; // ghost-eaten freeze (performance.now() ms)
+    this.pauseEater = null;
+    this.pauseGhost = -1;
+    this.myChomps = new Map(); // ghost -> time we locally ate it
     this.phase = 'connecting';
     this.phaseLeft = 0;
     this.phaseAt = 0;
@@ -64,7 +70,9 @@ export class Game {
         const firstLevel = this.level === 0;
         this.level = m.level;
         this.maze = getMaze(m.maze);
-        this.pellets = pelletsFromString(m.pellets);
+        this.pending.clear();
+        this.syncPellets(m.pellets);
+        this.pauseUntil = 0;
         this.setPhase(m.phase, m.phaseLeft);
         this.localFrightUntil = 0;
         this.eatenPending.clear();
@@ -83,9 +91,21 @@ export class Game {
       case 'snap':
         this.onSnap(m, now);
         break;
-      case 'eat':
-        if (m.by === this.you) this.applyEats(m.cells);
-        else this.delayedEats.push({ at: now + this.interpDelay, cells: m.cells, by: m.by });
+      case 'eat': {
+        const later = [];
+        for (const i of m.cells) {
+          this.serverPellets[i] = 0;
+          if (m.by === this.you || this.pending.has(i)) {
+            this.pending.delete(i);
+            this.pellets[i] = 0;
+          } else later.push(i);
+        }
+        // Others' eats vanish when their (interpolated) pac visibly reaches them.
+        if (later.length) this.delayedEats.push({ at: now + this.interpDelay, cells: later, by: m.by });
+        break;
+      }
+      case 'pellets':
+        this.syncPellets(m.s);
         break;
       case 'correct':
         this.corrections = (this.corrections || 0) + 1;
@@ -93,8 +113,9 @@ export class Game {
           this.me.x = this.prev.x = m.x;
           this.me.y = this.prev.y = m.y;
           this.me.dir = NONE;
-          this.pellets = pelletsFromString(m.pellets);
           this.pendingEat = [];
+          this.pending.clear();
+          this.syncPellets(m.pellets);
         }
         break;
       case 'ev':
@@ -145,10 +166,14 @@ export class Game {
         if (m.id !== this.you) this.deathAt.set(m.id, now + this.interpDelay);
         if (m.id !== this.you) this.emit('death', { id: m.id, mine: false });
         break;
-      case 'ghost':
-        this.eatenPending.set(m.g, now + 1500);
-        this.emit('ghostEaten', m);
+      case 'ghost': {
+        this.eatenPending.set(m.g, now + 1500 + (m.pause || 0) * 1000);
+        // Everyone freezes. If we were the eater we already froze locally.
+        const mine = m.id === this.you && now - (this.myChomps.get(m.g) ?? -1e9) < 2000;
+        if (!mine) this.startPause(now, m.pause || 0, m.id, m.g);
+        this.emit('ghostEaten', { ...m, mine });
         break;
+      }
       case 'power':
         if (m.id !== this.you) this.emit('power', m);
         break;
@@ -183,6 +208,45 @@ export class Game {
     for (const i of cells) this.pellets[i] = 0;
   }
 
+  /** Adopt the server's full pellet state, keeping our own unconfirmed eats hidden. */
+  syncPellets(str) {
+    this.serverPellets = pelletsFromString(str);
+    if (!this.pellets || this.pellets.length !== this.serverPellets.length) {
+      this.pellets = new Uint8Array(this.serverPellets.length);
+    }
+    for (let i = 0; i < this.pellets.length; i++) {
+      this.pellets[i] = this.pending.has(i) ? 0 : this.serverPellets[i];
+    }
+  }
+
+  startPause(now, seconds, eater, ghost) {
+    const until = now + seconds * 1000;
+    if (until > this.pauseUntil) {
+      this.pauseUntil = until;
+      this.pauseEater = eater;
+      this.pauseGhost = ghost;
+    }
+  }
+
+  isPaused(now) {
+    return now < this.pauseUntil;
+  }
+
+  /** Send our position and any pellets eaten right now (ordered before other messages). */
+  flushInput() {
+    const me = this.me;
+    this.transport.send({
+      t: 'in',
+      x: Math.round(me.x * 1000) / 1000,
+      y: Math.round(me.y * 1000) / 1000,
+      face: me.face,
+      moving: me.moving,
+      life: me.life,
+      eat: this.pendingEat,
+    });
+    this.pendingEat = [];
+  }
+
   setDirection(dir) {
     if (dir) this.me.next = dir;
   }
@@ -201,6 +265,15 @@ export class Game {
         }
       }
     }
+    // Predictions the server never confirmed (e.g. someone else got there
+    // first, or a message was rejected) are rolled back to the server's truth.
+    if (this.pending.size) {
+      for (const [i, exp] of this.pending) {
+        if (now < exp) continue;
+        this.pending.delete(i);
+        if (this.serverPellets[i]) this.pellets[i] = this.serverPellets[i];
+      }
+    }
     if (now - this.lastPing > 2000 && this.transport.online) {
       this.lastPing = now;
       this.transport.send({ t: 'ping', c: now });
@@ -214,7 +287,7 @@ export class Game {
     const me = this.me;
     this.prev.x = me.x;
     this.prev.y = me.y;
-    if (!this.maze || this.phase !== 'play' || !me.alive) {
+    if (!this.maze || this.phase !== 'play' || !me.alive || this.isPaused(now)) {
       me.moving = false;
       return;
     }
@@ -232,24 +305,14 @@ export class Game {
     if (kind) {
       this.pellets[i] = 0;
       this.pendingEat.push(i);
+      this.pending.set(i, now + 1500);
       if (kind === POWER) this.localFrightUntil = now + 700;
       this.emit('eat', { kind, mine: true });
     }
 
     this.checkCollisions(now);
 
-    if (this.tickCount % INPUT_EVERY === 0) {
-      this.transport.send({
-        t: 'in',
-        x: Math.round(me.x * 1000) / 1000,
-        y: Math.round(me.y * 1000) / 1000,
-        face: me.face,
-        moving: me.moving,
-        life: me.life,
-        eat: this.pendingEat,
-      });
-      this.pendingEat = [];
-    }
+    if (me.alive && (this.tickCount % INPUT_EVERY === 0 || this.pendingEat.length)) this.flushInput();
   }
 
   checkCollisions(now) {
@@ -261,14 +324,19 @@ export class Game {
       if (wrappedDist(this.maze, me.x, me.y, gv.x, gv.y) > HIT_DIST) continue;
       if (gv.mode === GM.FRIGHT) {
         if (!this.eatenPending.has(g)) {
-          this.eatenPending.set(g, now + 1000);
+          this.eatenPending.set(g, now + 1000 + GHOST_EAT_PAUSE * 1000);
+          this.myChomps.set(g, now);
+          this.flushInput(); // the power pellet must reach the server first
           this.transport.send({ t: 'eatGhost', g, life: me.life });
+          this.startPause(now, GHOST_EAT_PAUSE, this.you, g);
           this.emit('chomp', { g });
+          return;
         }
       } else if (now >= this.invulnUntil && !this.eatenPending.has(g)) {
         me.alive = false;
         me.moving = false;
         this.deathAt.set(this.you, now);
+        this.flushInput(); // don't lose the pellet we ate in this very step
         this.transport.send({ t: 'died', g, life: me.life });
         this.emit('death', { id: this.you, mine: true });
         return;

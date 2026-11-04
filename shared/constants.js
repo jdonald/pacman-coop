@@ -34,6 +34,10 @@ export const POINTS = { pellet: 10, power: 50, ghost: [200, 400, 800, 1600], cle
 export function readyTime(level) {
   return level === 1 ? 4.5 : 2.2;
 }
+// Eating a ghost briefly freezes the whole game for everyone, arcade style.
+export const GHOST_EAT_PAUSE = 1.0;
+// Full authoritative pellet state is re-sent this often (ticks) as a safety net.
+export const PELLET_SYNC_EVERY = 60;
 export const CLEAR_TIME = 2.6; // seconds of celebration after clearing a level
 export const RESPAWN_TIME = 2.2; // seconds a player stays dead (infinite lives!)
 export const INVULN_TIME = 2.5; // seconds of blinking invulnerability after (re)spawn

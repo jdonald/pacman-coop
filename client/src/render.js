@@ -19,7 +19,9 @@ export const PALETTES = [
 const WALL_H = 0.32;
 const PITCH = THREE.MathUtils.degToRad(54); // camera elevation
 const YAW = THREE.MathUtils.degToRad(20); // positive = world tilts to the right
-const SPRITE_LEAN = PITCH * 0.72; // cutouts lean back toward the camera
+// Characters are thick "pucks" standing nearly upright and facing south, so
+// the camera (above and to the right) sees their face plus the top/right rim.
+const SPRITE_LEAN = THREE.MathUtils.degToRad(24);
 const SPRITE_Y = 0.52;
 const tmpObj = new THREE.Object3D();
 
@@ -280,6 +282,9 @@ export class Renderer {
         if (moving) pac.phase = (pac.phase || 0) + dt * 18;
         pac.setChomp(moving ? Math.floor(pac.phase) % CHOMP_ANGLES.length : 2);
         pac.group.visible = !blinking || Math.floor(t * 10) % 2 === 0;
+        // Arcade style: during the ghost-eaten freeze, the eater and the ghost
+        // vanish and only the score is shown.
+        if (game.isPaused(now) && id === game.pauseEater) pac.group.visible = false;
       }
     }
     for (const [id, pac] of this.pacs) {
@@ -300,7 +305,7 @@ export class Renderer {
         g.group.visible = false;
         continue;
       }
-      g.group.visible = true;
+      g.group.visible = !(game.isPaused(now) && i === game.pauseGhost);
       const bob = v.mode === GM.HOUSE ? Math.sin(t * 5 + i) * 0.12 : 0;
       g.group.position.set(v.x, SPRITE_Y + bob, v.y);
       g.setMode(v.mode, flashWhite, v.face, skirt);
@@ -513,7 +518,7 @@ function cutoutGroup() {
   const group = new THREE.Group();
   const lean = new THREE.Group();
   lean.rotation.order = 'YXZ';
-  lean.rotation.y = YAW;
+  lean.rotation.y = 0;
   lean.rotation.x = -SPRITE_LEAN;
   group.add(lean);
   return { group, lean };

@@ -122,10 +122,29 @@ export class Sfx {
     this.tone(160, 0.25, { type: 'square', vol: 0.15, slide: 500 });
   }
 
+  /** Ghost eaten: a fast rising "bwoop" sweep with a warble, ~0.5 s. */
   ghost() {
-    // Rising "gulp" blip.
-    this.tone(120, 0.18, { type: 'square', vol: 0.22, slide: 1700 });
-    this.tone(400, 0.12, { type: 'triangle', vol: 0.2, slide: 1600, delay: 0.16 });
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const lfo = this.ctx.createOscillator();
+    const depth = this.ctx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(90, t);
+    o.frequency.exponentialRampToValueAtTime(1900, t + 0.42);
+    lfo.frequency.value = 30;
+    depth.gain.value = 60;
+    lfo.connect(depth).connect(o.frequency);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.02);
+    g.gain.setValueAtTime(0.22, t + 0.38);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    o.connect(g).connect(this.master);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + 0.52);
+    lfo.stop(t + 0.52);
   }
 
   death() {

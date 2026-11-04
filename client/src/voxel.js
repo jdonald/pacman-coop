@@ -136,7 +136,7 @@ export function pacGeometries(color, hat) {
   if (pacCache.has(key)) return pacCache.get(key);
   const colors = { ...HAT_COLORS, B: color };
   const px = 0.066;
-  const depth = 0.22;
+  const depth = 0.46; // thick like a pie
   const uniq = [...new Set(CHOMP_ANGLES)];
   const byAngle = new Map(uniq.map((a) => [a, voxelGeometry(pacRows(a, hat), colors, px, depth)]));
   const chomp = CHOMP_ANGLES.map((a) => byAngle.get(a));
@@ -170,7 +170,7 @@ const SKIRT_A = ['##.###..###.##', '#...##..##...#'];
 const SKIRT_B = ['#.####..####.#', '...##....##...'];
 
 const GPX = 0.072;
-const GDEPTH = 0.24;
+const GDEPTH = 0.44;
 
 function blank() {
   return Array.from({ length: 14 }, () => Array(14).fill('.'));
